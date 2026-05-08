@@ -1,0 +1,7 @@
+src/
+test/
+*.config.ts
+tsconfig*.json
+.github/
+ruvector.db
+coverage/
