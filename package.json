@@ -1,6 +1,6 @@
 {
   "name": "fetch-native-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fetch wrapper that bridges React Native WebView and the native app — routes fetch calls natively for file downloads and beyond",
   "license": "MIT",
   "author": "massimomoffa02@gmail.com",
@@ -66,10 +66,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/massimomoffa02/fetch-native-bridge.git"
+    "url": "https://github.com/MaxMoffa/fetch-native-bridge.git"
   },
   "bugs": {
-    "url": "https://github.com/massimomoffa02/fetch-native-bridge/issues"
+    "url": "https://github.com/MaxMoffa/fetch-native-bridge/issues"
   },
-  "homepage": "https://github.com/massimomoffa02/fetch-native-bridge#readme"
+  "homepage": "https://github.com/MaxMoffa/fetch-native-bridge#readme"
 }
