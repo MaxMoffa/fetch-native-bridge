@@ -1,8 +1,35 @@
 import { isFetchRequestMessage, type FetchRequestMessage, type SetupFetchHandlerOptions } from '../shared/protocol';
+import { base64ToUint8Array } from '../shared/base64';
 import type { WebViewMessageEvent, WebViewRef } from '../types/react-native';
 import { serializeResponse } from './response';
 
 const DEFAULT_TIMEOUT = 30_000;
+
+function buildNativeBody(req: FetchRequestMessage): { body: BodyInit | undefined; headers: Record<string, string> } {
+  const headers = { ...req.headers };
+
+  if (req.bodyType === 'formdata' && req.formDataEntries) {
+    const fd = new FormData();
+    for (const entry of req.formDataEntries) {
+      if ('filename' in entry) {
+        const bytes = base64ToUint8Array(entry.data);
+        const blob = new Blob([bytes.buffer as ArrayBuffer], { type: entry.contentType });
+        fd.append(entry.name, blob, entry.filename);
+      } else {
+        fd.append(entry.name, entry.value);
+      }
+    }
+    delete headers['content-type'];
+    delete headers['Content-Type'];
+    return { body: fd, headers };
+  }
+
+  if (req.bodyType === 'base64' && req.body) {
+    return { body: base64ToUint8Array(req.body).buffer as ArrayBuffer, headers };
+  }
+
+  return { body: req.body ?? undefined, headers };
+}
 
 export function setupFetchHandler(
   webViewRef: WebViewRef,
@@ -21,11 +48,13 @@ export function setupFetchHandler(
     const timer = setTimeout(() => controller.abort(), timeout);
 
     try {
+      const { body, headers } = buildNativeBody(req);
       const response = await globalThis.fetch(req.url, {
         method: req.method,
-        headers: req.headers,
-        body: req.body ?? undefined,
+        headers,
+        body,
         signal: controller.signal,
+        ...(options?.credentials !== undefined && { credentials: options.credentials }),
       });
 
       clearTimeout(timer);

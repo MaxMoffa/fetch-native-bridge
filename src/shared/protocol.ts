@@ -1,3 +1,7 @@
+export type FormDataEntry =
+  | { name: string; value: string }
+  | { name: string; filename: string; data: string; contentType: string };
+
 export interface FetchRequestMessage {
   type: 'FETCH_REQUEST';
   id: string;
@@ -5,6 +9,8 @@ export interface FetchRequestMessage {
   method: string;
   headers: Record<string, string>;
   body: string | null;
+  bodyType?: 'text' | 'formdata' | 'base64';
+  formDataEntries?: FormDataEntry[];
 }
 
 export interface FetchResponseMessage {
@@ -25,6 +31,7 @@ export interface FetchBridgeOptions extends RequestInit {
 
 export interface SetupFetchHandlerOptions {
   timeout?: number;
+  credentials?: RequestCredentials;
   onFetch?: (req: FetchRequestMessage, res: Response) => boolean | Promise<boolean>;
 }
 

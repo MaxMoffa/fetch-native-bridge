@@ -1,5 +1,6 @@
 import { generateUUID } from '../shared/uuid';
-import { isFetchResponseMessage, type FetchBridgeOptions, type FetchRequestMessage } from '../shared/protocol';
+import { isFetchResponseMessage, type FetchBridgeOptions, type FetchRequestMessage, type FormDataEntry } from '../shared/protocol';
+import { uint8ArrayToBase64, base64ToUint8Array } from '../shared/base64';
 import { isReactNativeWebView } from './detect';
 import { PendingRequestMap } from './pending';
 
@@ -19,17 +20,16 @@ function buildHeaders(init?: RequestInit): Record<string, string> {
   return result;
 }
 
-function buildBody(init?: RequestInit): string | null {
-  if (!init?.body) return null;
-  if (typeof init.body === 'string') return init.body;
-  return String(init.body);
-}
-
-function base64ToUint8Array(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+function readBlobAsBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 function buildResponse(msg: {
@@ -64,14 +64,66 @@ export async function fetchBridge(
   const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
   const id = generateUUID();
   const timeout = init?.timeout ?? DEFAULT_TIMEOUT;
+  const headers = buildHeaders(init);
+
+  let body: string | null = null;
+  let bodyType: FetchRequestMessage['bodyType'];
+  let formDataEntries: FormDataEntry[] | undefined;
+
+  const rawBody = init?.body ?? null;
+
+  // Sync paths — no await, so postMessage runs synchronously for these cases
+  if (!rawBody) {
+    // body stays null
+  } else if (typeof rawBody === 'string') {
+    body = rawBody;
+    bodyType = 'text';
+  } else if (rawBody instanceof URLSearchParams) {
+    body = rawBody.toString();
+    bodyType = 'text';
+  } else if (rawBody instanceof ArrayBuffer) {
+    body = uint8ArrayToBase64(new Uint8Array(rawBody));
+    bodyType = 'base64';
+  } else if (ArrayBuffer.isView(rawBody)) {
+    body = uint8ArrayToBase64(new Uint8Array(rawBody.buffer as ArrayBuffer, rawBody.byteOffset, rawBody.byteLength));
+    bodyType = 'base64';
+  } else if (rawBody instanceof FormData) {
+    // Async path — collect entries synchronously first, then await async reads
+    const rawEntries: [string, FormDataEntryValue][] = [];
+    rawBody.forEach((value, name) => rawEntries.push([name, value]));
+    const entries: FormDataEntry[] = [];
+    for (const [name, value] of rawEntries) {
+      if (typeof value === 'string') {
+        entries.push({ name, value });
+      } else {
+        const data = await readBlobAsBase64(value);
+        entries.push({
+          name,
+          filename: value instanceof File ? value.name : 'blob',
+          data,
+          contentType: value.type || 'application/octet-stream',
+        });
+      }
+    }
+    formDataEntries = entries;
+    bodyType = 'formdata';
+    delete headers['content-type'];
+    delete headers['Content-Type'];
+  } else if (rawBody instanceof Blob) {
+    // Async path
+    body = await readBlobAsBase64(rawBody);
+    bodyType = 'base64';
+  }
 
   const msg: FetchRequestMessage = {
     type: 'FETCH_REQUEST',
     id,
     url,
     method: init?.method ?? 'GET',
-    headers: buildHeaders(init),
-    body: buildBody(init),
+    headers,
+    body,
+    bodyType,
+    formDataEntries,
   };
 
   return new Promise<Response>((resolve, reject) => {
