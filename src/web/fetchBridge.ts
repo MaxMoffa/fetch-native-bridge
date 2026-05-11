@@ -1,11 +1,7 @@
 import { generateUUID } from '../shared/uuid';
-import { isFetchResponseMessage, type FetchBridgeOptions, type FetchRequestMessage, type FormDataEntry } from '../shared/protocol';
-import { uint8ArrayToBase64, base64ToUint8Array } from '../shared/base64';
+import { type FetchBridgeOptions, type FetchRequestMessage, type FormDataEntry } from '../shared/protocol';
+import { uint8ArrayToBase64 } from '../shared/base64';
 import { isReactNativeWebView } from './detect';
-import { PendingRequestMap } from './pending';
-
-const DEFAULT_TIMEOUT = 30_000;
-const pending = new PendingRequestMap();
 
 function buildHeaders(init?: RequestInit): Record<string, string> {
   const result: Record<string, string> = {};
@@ -32,26 +28,6 @@ function readBlobAsBase64(blob: Blob): Promise<string> {
   });
 }
 
-function buildResponse(msg: {
-  status: number;
-  statusText: string;
-  headers: Record<string, string>;
-  body: string;
-  bodyEncoding: 'text' | 'base64';
-  ok: boolean;
-}): Response {
-  const responseBody: BodyInit =
-    msg.bodyEncoding === 'base64'
-      ? base64ToUint8Array(msg.body).buffer as ArrayBuffer
-      : msg.body;
-
-  return new Response(responseBody, {
-    status: msg.status,
-    statusText: msg.statusText,
-    headers: msg.headers,
-  });
-}
-
 export async function fetchBridge(
   input: RequestInfo | URL,
   init?: FetchBridgeOptions
@@ -63,7 +39,6 @@ export async function fetchBridge(
 
   const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
   const id = generateUUID();
-  const timeout = init?.timeout ?? DEFAULT_TIMEOUT;
   const headers = buildHeaders(init);
 
   let body: string | null = null;
@@ -126,33 +101,6 @@ export async function fetchBridge(
     formDataEntries,
   };
 
-  return new Promise<Response>((resolve, reject) => {
-    function onMessage(event: MessageEvent) {
-      let data: unknown;
-      try {
-        data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-      } catch {
-        return;
-      }
-      if (!isFetchResponseMessage(data) || data.id !== id) return;
-
-      window.removeEventListener('message', onMessage);
-
-      if (data.error) {
-        pending.reject(id, new Error(data.error));
-        return;
-      }
-      pending.resolve(id, data);
-    }
-
-    pending.add(
-      id,
-      (responseMsg) => resolve(buildResponse(responseMsg)),
-      reject,
-      timeout
-    );
-
-    window.addEventListener('message', onMessage);
-    ;(window as any).ReactNativeWebView.postMessage(JSON.stringify(msg));
-  });
+  ;(window as any).ReactNativeWebView.postMessage(JSON.stringify(msg));
+  return new Response(null, { status: 200 });
 }
