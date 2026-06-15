@@ -12,7 +12,11 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export async function serializeResponse(id: string, response: Response): Promise<FetchResponseMessage> {
+export async function serializeResponse(
+  id: string,
+  response: Response,
+  options?: { sendBinaryBody?: boolean }
+): Promise<FetchResponseMessage> {
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => { headers[key] = value; });
 
@@ -21,9 +25,16 @@ export async function serializeResponse(id: string, response: Response): Promise
   let bodyEncoding: 'text' | 'base64';
 
   if (isBinary(contentType)) {
-    const buffer = await response.arrayBuffer();
-    body = uint8ArrayToBase64(new Uint8Array(buffer));
-    bodyEncoding = 'base64';
+    if (options?.sendBinaryBody) {
+      const buffer = await response.arrayBuffer();
+      body = uint8ArrayToBase64(new Uint8Array(buffer));
+      bodyEncoding = 'base64';
+    } else {
+      // Don't serialize binary body — avoids large postMessage payloads.
+      // Native side should handle binary responses directly (save to disk, etc.).
+      body = '';
+      bodyEncoding = 'text';
+    }
   } else {
     body = await response.text();
     bodyEncoding = 'text';

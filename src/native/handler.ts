@@ -65,7 +65,7 @@ export function setupFetchHandler(
         if (!shouldSend) return;
       }
 
-      const msg = await serializeResponse(req.id, response);
+      const msg = await serializeResponse(req.id, response, { sendBinaryBody: options?.sendBinaryBody });
       webViewRef.current?.postMessage(JSON.stringify(msg));
     } catch (err) {
       clearTimeout(timer);

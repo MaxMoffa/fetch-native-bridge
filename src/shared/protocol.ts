@@ -32,6 +32,8 @@ export interface FetchBridgeOptions extends RequestInit {
 export interface SetupFetchHandlerOptions {
   timeout?: number;
   credentials?: RequestCredentials;
+  /** When true, binary response bodies are serialized and sent back to the WebView. Default: false. */
+  sendBinaryBody?: boolean;
   onFetch?: (req: FetchRequestMessage, res: Response) => boolean | Promise<boolean>;
 }
 

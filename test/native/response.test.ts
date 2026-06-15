@@ -22,29 +22,52 @@ describe('serializeResponse', () => {
     expect(msg.type).toBe('FETCH_RESPONSE');
   });
 
-  it('serializes binary response as base64', async () => {
+  it('strips binary body by default (sendBinaryBody not set)', async () => {
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
     const response = makeResponse(bytes, 'image/png');
     const msg = await serializeResponse('img-id', response);
+    expect(msg.bodyEncoding).toBe('text');
+    expect(msg.body).toBe('');
+  });
+
+  it('serializes binary response as base64 when sendBinaryBody: true', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const response = makeResponse(bytes, 'image/png');
+    const msg = await serializeResponse('img-id', response, { sendBinaryBody: true });
     expect(msg.bodyEncoding).toBe('base64');
     expect(typeof msg.body).toBe('string');
-    // Decode and verify
     const decoded = Uint8Array.from(atob(msg.body), (c) => c.charCodeAt(0));
     expect(decoded[0]).toBe(0x89);
     expect(decoded[1]).toBe(0x50);
   });
 
-  it('serializes application/octet-stream as base64', async () => {
+  it('strips application/octet-stream body by default', async () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const response = makeResponse(bytes, 'application/octet-stream');
     const msg = await serializeResponse('bin-id', response);
+    expect(msg.bodyEncoding).toBe('text');
+    expect(msg.body).toBe('');
+  });
+
+  it('serializes application/octet-stream as base64 when sendBinaryBody: true', async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const response = makeResponse(bytes, 'application/octet-stream');
+    const msg = await serializeResponse('bin-id', response, { sendBinaryBody: true });
     expect(msg.bodyEncoding).toBe('base64');
   });
 
-  it('serializes application/pdf as base64', async () => {
+  it('strips application/pdf body by default', async () => {
     const bytes = new Uint8Array([37, 80, 68, 70]); // %PDF
     const response = makeResponse(bytes, 'application/pdf');
     const msg = await serializeResponse('pdf-id', response);
+    expect(msg.bodyEncoding).toBe('text');
+    expect(msg.body).toBe('');
+  });
+
+  it('serializes application/pdf as base64 when sendBinaryBody: true', async () => {
+    const bytes = new Uint8Array([37, 80, 68, 70]); // %PDF
+    const response = makeResponse(bytes, 'application/pdf');
+    const msg = await serializeResponse('pdf-id', response, { sendBinaryBody: true });
     expect(msg.bodyEncoding).toBe('base64');
   });
 

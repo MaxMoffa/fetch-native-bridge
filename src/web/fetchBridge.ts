@@ -1,7 +1,59 @@
 import { generateUUID } from '../shared/uuid';
-import { type FetchBridgeOptions, type FetchRequestMessage, type FormDataEntry } from '../shared/protocol';
+import {
+  type FetchBridgeOptions,
+  type FetchRequestMessage,
+  type FetchResponseMessage,
+  type FormDataEntry,
+  isFetchResponseMessage,
+} from '../shared/protocol';
 import { uint8ArrayToBase64 } from '../shared/base64';
 import { isReactNativeWebView } from './detect';
+import { PendingRequestMap } from './pending';
+
+const DEFAULT_TIMEOUT = 30_000;
+
+const _pending = new PendingRequestMap();
+let _listenerInstalled = false;
+
+function _onNativeMessage(event: MessageEvent): void {
+  let data: unknown;
+  try {
+    data = JSON.parse(typeof event.data === 'string' ? event.data : '');
+  } catch {
+    return;
+  }
+  if (!isFetchResponseMessage(data)) return;
+  if (data.error) {
+    _pending.reject(data.id, new Error(data.error));
+  } else {
+    _pending.resolve(data.id, data);
+  }
+}
+
+function _ensureListener(): void {
+  if (_listenerInstalled) return;
+  _listenerInstalled = true;
+  window.addEventListener('message', _onNativeMessage);
+  // Android React Native WebView dispatches on document
+  document.addEventListener('message', _onNativeMessage as EventListener);
+}
+
+function _buildResponse(msg: FetchResponseMessage): Response {
+  let bodyInit: BodyInit | null = null;
+  if (msg.bodyEncoding === 'base64' && msg.body) {
+    const binary = atob(msg.body);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    bodyInit = bytes.buffer as ArrayBuffer;
+  } else {
+    bodyInit = msg.body || null;
+  }
+  return new Response(bodyInit, {
+    status: msg.status,
+    statusText: msg.statusText,
+    headers: msg.headers,
+  });
+}
 
 function buildHeaders(init?: RequestInit): Record<string, string> {
   const result: Record<string, string> = {};
@@ -47,7 +99,6 @@ export async function fetchBridge(
 
   const rawBody = init?.body ?? null;
 
-  // Sync paths — no await, so postMessage runs synchronously for these cases
   if (!rawBody) {
     // body stays null
   } else if (typeof rawBody === 'string') {
@@ -63,7 +114,6 @@ export async function fetchBridge(
     body = uint8ArrayToBase64(new Uint8Array(rawBody.buffer as ArrayBuffer, rawBody.byteOffset, rawBody.byteLength));
     bodyType = 'base64';
   } else if (rawBody instanceof FormData) {
-    // Async path — collect entries synchronously first, then await async reads
     const rawEntries: [string, FormDataEntryValue][] = [];
     rawBody.forEach((value, name) => rawEntries.push([name, value]));
     const entries: FormDataEntry[] = [];
@@ -85,7 +135,6 @@ export async function fetchBridge(
     delete headers['content-type'];
     delete headers['Content-Type'];
   } else if (rawBody instanceof Blob) {
-    // Async path
     body = await readBlobAsBase64(rawBody);
     bodyType = 'base64';
   }
@@ -101,6 +150,26 @@ export async function fetchBridge(
     formDataEntries,
   };
 
+  _ensureListener();
   ;(window as any).ReactNativeWebView.postMessage(JSON.stringify(msg));
-  return new Response(null, { status: 200 });
+
+  const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT;
+  return new Promise<Response>((resolve, reject) => {
+    _pending.add(
+      id,
+      (responseMsg) => {
+        try {
+          resolve(_buildResponse(responseMsg));
+        } catch (e) {
+          reject(e instanceof Error ? e : new Error(String(e)));
+        }
+      },
+      reject,
+      timeoutMs,
+    );
+  });
+}
+
+export function teardownFetchBridge(): void {
+  _pending.clear();
 }

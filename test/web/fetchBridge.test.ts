@@ -1,5 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchBridge } from '../../src/web/fetchBridge';
+import { fetchBridge, teardownFetchBridge } from '../../src/web/fetchBridge';
+import type { FetchResponseMessage } from '../../src/shared/protocol';
+
+function makeNativeResponse(id: string, overrides?: Partial<FetchResponseMessage>): FetchResponseMessage {
+  return {
+    type: 'FETCH_RESPONSE',
+    id,
+    status: 200,
+    statusText: 'OK',
+    headers: { 'content-type': 'application/json' },
+    body: '{"ok":true}',
+    bodyEncoding: 'text',
+    ok: true,
+    ...overrides,
+  };
+}
+
+function dispatchNativeResponse(msg: FetchResponseMessage): void {
+  window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(msg) }));
+}
 
 describe('fetchBridge — non-WebView context', () => {
   it('delegates to globalThis.fetch', async () => {
@@ -21,9 +40,10 @@ describe('fetchBridge — WebView context', () => {
 
   afterEach(() => {
     delete (window as any).ReactNativeWebView;
+    teardownFetchBridge();
   });
 
-  it('posts a FETCH_REQUEST message and resolves immediately with 200', async () => {
+  it('posts a FETCH_REQUEST message and resolves with native response', async () => {
     const fetchPromise = fetchBridge('https://api.example.com/data');
 
     expect(postMessage).toHaveBeenCalledOnce();
@@ -32,9 +52,13 @@ describe('fetchBridge — WebView context', () => {
     expect(postedMsg.url).toBe('https://api.example.com/data');
     expect(postedMsg.method).toBe('GET');
 
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id));
+
     const response = await fetchPromise;
     expect(response.status).toBe(200);
     expect(response.ok).toBe(true);
+    const json = await response.json();
+    expect(json).toEqual({ ok: true });
   });
 
   it('sends correct method and headers', async () => {
@@ -47,6 +71,8 @@ describe('fetchBridge — WebView context', () => {
     expect(postedMsg.method).toBe('POST');
     expect(postedMsg.headers['Authorization']).toBe('Bearer token');
     expect(postedMsg.body).toBe('{"data":1}');
+
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id));
     await fetchPromise;
   });
 
@@ -70,6 +96,8 @@ describe('fetchBridge — WebView context', () => {
     ]);
     expect(postedMsg.headers['content-type']).toBeUndefined();
     expect(postedMsg.headers['Content-Type']).toBeUndefined();
+
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id));
     await fetchPromise;
   });
 
@@ -87,6 +115,8 @@ describe('fetchBridge — WebView context', () => {
     const postedMsg = JSON.parse(postMessage.mock.calls[0][0]);
     expect(postedMsg.headers['Content-Type']).toBeUndefined();
     expect(postedMsg.headers['content-type']).toBeUndefined();
+
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id));
     await fetchPromise;
   });
 
@@ -107,6 +137,8 @@ describe('fetchBridge — WebView context', () => {
     expect(entry.filename).toBe('test.txt');
     expect(entry.contentType).toBe('text/plain');
     expect(entry.data).toBe(btoa('AB'));
+
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id));
     await fetchPromise;
   });
 
@@ -121,6 +153,8 @@ describe('fetchBridge — WebView context', () => {
     const postedMsg = JSON.parse(postMessage.mock.calls[0][0]);
     expect(postedMsg.bodyType).toBe('text');
     expect(postedMsg.body).toBe('foo=bar&baz=42');
+
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id));
     await fetchPromise;
   });
 
@@ -135,6 +169,46 @@ describe('fetchBridge — WebView context', () => {
     const postedMsg = JSON.parse(postMessage.mock.calls[0][0]);
     expect(postedMsg.bodyType).toBe('base64');
     expect(postedMsg.body).toBe(btoa('\x89\x50\x4e\x47'));
+
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id));
     await fetchPromise;
+  });
+
+  it('rejects on error response from native', async () => {
+    const fetchPromise = fetchBridge('https://api.example.com/fail');
+
+    const postedMsg = JSON.parse(postMessage.mock.calls[0][0]);
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id, {
+      status: 0,
+      ok: false,
+      body: '',
+      error: 'Network error',
+    }));
+
+    await expect(fetchPromise).rejects.toThrow('Network error');
+  });
+
+  it('decodes base64 body from native response', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const b64 = btoa(String.fromCharCode(...bytes));
+
+    const fetchPromise = fetchBridge('https://api.example.com/img');
+    const postedMsg = JSON.parse(postMessage.mock.calls[0][0]);
+
+    dispatchNativeResponse(makeNativeResponse(postedMsg.id, {
+      headers: { 'content-type': 'image/png' },
+      body: b64,
+      bodyEncoding: 'base64',
+    }));
+
+    const response = await fetchPromise;
+    const buffer = await response.arrayBuffer();
+    expect(new Uint8Array(buffer)[0]).toBe(0x89);
+    expect(new Uint8Array(buffer)[1]).toBe(0x50);
+  });
+
+  it('times out if native never responds', async () => {
+    const fetchPromise = fetchBridge('https://api.example.com/slow', { timeout: 50 });
+    await expect(fetchPromise).rejects.toThrow(/timed out/);
   });
 });
