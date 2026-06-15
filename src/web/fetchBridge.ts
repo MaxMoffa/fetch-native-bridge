@@ -6,7 +6,7 @@ import {
   type FormDataEntry,
   isFetchResponseMessage,
 } from '../shared/protocol';
-import { uint8ArrayToBase64 } from '../shared/base64';
+import { uint8ArrayToBase64, base64ToUint8Array } from '../shared/base64';
 import { isReactNativeWebView } from './detect';
 import { PendingRequestMap } from './pending';
 
@@ -23,7 +23,7 @@ function _onNativeMessage(event: MessageEvent): void {
     return;
   }
   if (!isFetchResponseMessage(data)) return;
-  if (data.error) {
+  if (data.error !== undefined) {
     _pending.reject(data.id, new Error(data.error));
   } else {
     _pending.resolve(data.id, data);
@@ -41,10 +41,7 @@ function _ensureListener(): void {
 function _buildResponse(msg: FetchResponseMessage): Response {
   let bodyInit: BodyInit | null = null;
   if (msg.bodyEncoding === 'base64' && msg.body) {
-    const binary = atob(msg.body);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    bodyInit = bytes.buffer as ArrayBuffer;
+    bodyInit = base64ToUint8Array(msg.body).buffer as ArrayBuffer;
   } else {
     bodyInit = msg.body || null;
   }
@@ -87,6 +84,10 @@ export async function fetchBridge(
   if (!isReactNativeWebView()) {
     const { timeout: _t, ...fetchInit } = init ?? {};
     return globalThis.fetch(input, fetchInit);
+  }
+
+  if (init?.signal?.aborted) {
+    return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
   }
 
   const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
@@ -154,6 +155,7 @@ export async function fetchBridge(
   ;(window as any).ReactNativeWebView.postMessage(JSON.stringify(msg));
 
   const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT;
+  const signal = init?.signal;
   return new Promise<Response>((resolve, reject) => {
     _pending.add(
       id,
@@ -167,6 +169,13 @@ export async function fetchBridge(
       reject,
       timeoutMs,
     );
+
+    if (signal) {
+      const onAbort = () => {
+        _pending.reject(id, new DOMException('The operation was aborted.', 'AbortError') as unknown as Error);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 

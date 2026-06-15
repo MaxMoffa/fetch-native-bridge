@@ -4,11 +4,12 @@ export function generateUUID(): string {
     crypto.getRandomValues(bytes);
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    return [...bytes]
-      .map((b, i) =>
-        [4, 6, 8, 10].includes(i) ? `-${b.toString(16).padStart(2, '0')}` : b.toString(16).padStart(2, '0')
-      )
-      .join('');
+    let uuid = '';
+    for (let i = 0; i < 16; i++) {
+      if (i === 4 || i === 6 || i === 8 || i === 10) uuid += '-';
+      uuid += bytes[i].toString(16).padStart(2, '0');
+    }
+    return uuid;
   }
   // Fallback for envs without crypto (old RN < 0.71)
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {

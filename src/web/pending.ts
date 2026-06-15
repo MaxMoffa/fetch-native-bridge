@@ -42,10 +42,10 @@ export class PendingRequestMap {
 
   clear(): void {
     const err = new Error('fetchBridge: torn down');
-    for (const [id, entry] of this.map) {
+    for (const entry of this.map.values()) {
       clearTimeout(entry.timer);
       entry.reject(err);
-      this.map.delete(id);
     }
+    this.map.clear();
   }
 }

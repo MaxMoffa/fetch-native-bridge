@@ -40,6 +40,7 @@ export function setupFetchHandler(
 } {
   const controllers = new Map<string, AbortController>();
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
+  let isDestroyed = false;
 
   async function handleRequest(req: FetchRequestMessage): Promise<void> {
     const controller = new AbortController();
@@ -88,6 +89,7 @@ export function setupFetchHandler(
   }
 
   function onMessage(event: WebViewMessageEvent): void {
+    if (isDestroyed) return;
     let data: unknown;
     try {
       data = JSON.parse(event.nativeEvent.data);
@@ -99,6 +101,7 @@ export function setupFetchHandler(
   }
 
   function teardown(): void {
+    isDestroyed = true;
     for (const controller of controllers.values()) controller.abort();
     controllers.clear();
   }

@@ -1,15 +1,10 @@
 import type { FetchResponseMessage } from '../shared/protocol';
+import { uint8ArrayToBase64 } from '../shared/base64';
 
 const BINARY_CONTENT_TYPES = ['image/', 'application/octet-stream', 'application/pdf', 'audio/', 'video/'];
 
 function isBinary(contentType: string): boolean {
   return BINARY_CONTENT_TYPES.some((prefix) => contentType.startsWith(prefix));
-}
-
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
 }
 
 export async function serializeResponse(

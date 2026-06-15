@@ -25,6 +25,8 @@ export interface FetchResponseMessage {
   error?: string;
 }
 
+export const PROTOCOL_VERSION = '1' as const;
+
 export interface FetchBridgeOptions extends RequestInit {
   timeout?: number;
 }
@@ -34,6 +36,10 @@ export interface SetupFetchHandlerOptions {
   credentials?: RequestCredentials;
   /** When true, binary response bodies are serialized and sent back to the WebView. Default: false. */
   sendBinaryBody?: boolean;
+  /**
+   * Intercept each request before the response is sent back to the WebView.
+   * Return `false` to suppress sending the response (e.g., for caching or logging).
+   */
   onFetch?: (req: FetchRequestMessage, res: Response) => boolean | Promise<boolean>;
 }
 
