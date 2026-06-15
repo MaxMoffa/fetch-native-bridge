@@ -15,10 +15,21 @@ const DEFAULT_TIMEOUT = 30_000;
 const _pending = new PendingRequestMap();
 let _listenerInstalled = false;
 
+function _makeAbortError(): Error {
+  try {
+    return new DOMException('The operation was aborted.', 'AbortError');
+  } catch {
+    const err = new Error('The operation was aborted.');
+    (err as any).name = 'AbortError';
+    return err;
+  }
+}
+
 function _onNativeMessage(event: MessageEvent): void {
+  if (typeof event.data !== 'string') return;
   let data: unknown;
   try {
-    data = JSON.parse(typeof event.data === 'string' ? event.data : '');
+    data = JSON.parse(event.data);
   } catch {
     return;
   }
@@ -87,7 +98,7 @@ export async function fetchBridge(
   }
 
   if (init?.signal?.aborted) {
-    return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+    return Promise.reject(_makeAbortError());
   }
 
   const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
@@ -172,7 +183,7 @@ export async function fetchBridge(
 
     if (signal) {
       const onAbort = () => {
-        _pending.reject(id, new DOMException('The operation was aborted.', 'AbortError') as unknown as Error);
+        _pending.reject(id, _makeAbortError());
       };
       signal.addEventListener('abort', onAbort, { once: true });
     }
@@ -181,4 +192,7 @@ export async function fetchBridge(
 
 export function teardownFetchBridge(): void {
   _pending.clear();
+  window.removeEventListener('message', _onNativeMessage);
+  document.removeEventListener('message', _onNativeMessage as EventListener);
+  _listenerInstalled = false;
 }

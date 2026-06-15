@@ -1,4 +1,5 @@
 import type { FetchResponseMessage } from '../shared/protocol';
+import { FetchBridgeTimeoutError, FetchBridgeError } from '../shared/errors';
 
 interface PendingEntry {
   resolve: (msg: FetchResponseMessage) => void;
@@ -18,7 +19,7 @@ export class PendingRequestMap {
     const timer = setTimeout(() => {
       if (this.map.has(id)) {
         this.map.delete(id);
-        reject(new Error(`fetchBridge: request ${id} timed out after ${timeoutMs}ms`));
+        reject(new FetchBridgeTimeoutError(id, timeoutMs));
       }
     }, timeoutMs);
     this.map.set(id, { resolve, reject, timer });
@@ -41,7 +42,7 @@ export class PendingRequestMap {
   }
 
   clear(): void {
-    const err = new Error('fetchBridge: torn down');
+    const err = new FetchBridgeError('fetchBridge: torn down');
     for (const entry of this.map.values()) {
       clearTimeout(entry.timer);
       entry.reject(err);

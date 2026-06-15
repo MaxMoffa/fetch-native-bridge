@@ -37,6 +37,12 @@ export interface SetupFetchHandlerOptions {
   /** When true, binary response bodies are serialized and sent back to the WebView. Default: false. */
   sendBinaryBody?: boolean;
   /**
+   * Additional content-type prefixes to treat as binary.
+   * Built-in: `image/`, `application/octet-stream`, `application/pdf`, `audio/`, `video/`.
+   * Example: `['application/wasm', 'font/']`
+   */
+  additionalBinaryTypes?: string[];
+  /**
    * Intercept each request before the response is sent back to the WebView.
    * Return `false` to suppress sending the response (e.g., for caching or logging).
    */

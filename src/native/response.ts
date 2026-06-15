@@ -3,14 +3,16 @@ import { uint8ArrayToBase64 } from '../shared/base64';
 
 const BINARY_CONTENT_TYPES = ['image/', 'application/octet-stream', 'application/pdf', 'audio/', 'video/'];
 
-function isBinary(contentType: string): boolean {
-  return BINARY_CONTENT_TYPES.some((prefix) => contentType.startsWith(prefix));
+function isBinary(contentType: string, extra?: string[]): boolean {
+  if (BINARY_CONTENT_TYPES.some((prefix) => contentType.startsWith(prefix))) return true;
+  if (extra) return extra.some((prefix) => contentType.startsWith(prefix));
+  return false;
 }
 
 export async function serializeResponse(
   id: string,
   response: Response,
-  options?: { sendBinaryBody?: boolean }
+  options?: { sendBinaryBody?: boolean; additionalBinaryTypes?: string[] }
 ): Promise<FetchResponseMessage> {
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => { headers[key] = value; });
@@ -19,7 +21,7 @@ export async function serializeResponse(
   let body: string;
   let bodyEncoding: 'text' | 'base64';
 
-  if (isBinary(contentType)) {
+  if (isBinary(contentType, options?.additionalBinaryTypes)) {
     if (options?.sendBinaryBody) {
       const buffer = await response.arrayBuffer();
       body = uint8ArrayToBase64(new Uint8Array(buffer));

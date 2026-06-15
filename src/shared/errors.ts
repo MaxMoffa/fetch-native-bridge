@@ -23,3 +23,11 @@ export class FetchBridgeNetworkError extends FetchBridgeError {
     this.name = 'FetchBridgeNetworkError';
   }
 }
+
+export function isFetchBridgeError(err: unknown): err is FetchBridgeError {
+  return err instanceof FetchBridgeError;
+}
+
+export function isFetchBridgeTimeoutError(err: unknown): err is FetchBridgeTimeoutError {
+  return err instanceof FetchBridgeTimeoutError;
+}
