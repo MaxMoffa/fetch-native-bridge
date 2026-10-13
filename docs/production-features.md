@@ -1,10 +1,15 @@
 # Production Features Roadmap — fetch-native-bridge
 
-## Current State Summary
+## Status (v0.2.0)
 
-Before evaluating features, one critical architectural gap was identified during analysis:
-
-**`fetchBridge.ts` does not await the native response.** It posts the `FETCH_REQUEST` message then immediately returns `new Response(null, { status: 200 })`. The `PendingRequestMap` class in `src/web/pending.ts` exists but is never used by `fetchBridge`, and no `window.addEventListener('message', ...)` listener is wired up on the web side. The library therefore cannot fulfill its core promise of returning the actual native response to the caller. This must be fixed before any feature below is implemented.
+| # | Feature | Status |
+|---|---------|--------|
+| 1 | Web-side response listener + `PendingRequestMap` | ✅ Done |
+| 2 | AbortSignal passthrough (`FETCH_CANCEL`) | ✅ Done |
+| 4 | Request interceptors | 🟡 Partial — `fetch` option (native) and `onFetch` (response) |
+| — | URL / page-origin allow-lists | ✅ Done (`allowedUrls`, `allowedOrigins`) |
+| — | Per-request timeout forwarded to native | ✅ Done (`timeout`, `maxTimeout`) |
+| 3, 5–11 | Everything else below | ⏳ Open |
 
 ---
 
