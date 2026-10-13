@@ -58,3 +58,35 @@ describe('PendingRequestMap', () => {
     await expect(p2).rejects.toThrow('torn down');
   });
 });
+
+describe('PendingRequestMap — extras', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('calls onTimeout after rejecting', async () => {
+    const map = new PendingRequestMap();
+    const onTimeout = vi.fn();
+    const promise = new Promise((res, rej) => map.add('t', res, rej, 100, onTimeout));
+    vi.advanceTimersByTime(101);
+    await expect(promise).rejects.toThrow('timed out');
+    expect(onTimeout).toHaveBeenCalledOnce();
+    expect(map.has('t')).toBe(false);
+  });
+
+  it('a timeout of 0 never fires', () => {
+    const map = new PendingRequestMap();
+    const reject = vi.fn();
+    map.add('t', vi.fn(), reject, 0);
+    vi.advanceTimersByTime(1e9);
+    expect(reject).not.toHaveBeenCalled();
+    expect(map.size).toBe(1);
+  });
+
+  it('clear() returns the ids it rejected', () => {
+    const map = new PendingRequestMap();
+    map.add('a', vi.fn(), vi.fn(), 1000);
+    map.add('b', vi.fn(), vi.fn(), 1000);
+    expect(map.clear()).toEqual(['a', 'b']);
+    expect(map.size).toBe(0);
+  });
+});

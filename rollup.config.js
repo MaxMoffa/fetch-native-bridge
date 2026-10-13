@@ -18,16 +18,19 @@ const config = entries.flatMap(({ input, dir }) => [
   {
     input,
     output: { file: `${dir}/index.mjs`, format: 'esm', sourcemap: true },
+    external: ['react'],
     plugins: [resolve(), tsPlugin()],
   },
   {
     input,
     output: { file: `${dir}/index.cjs`, format: 'cjs', sourcemap: true },
+    external: ['react'],
     plugins: [resolve(), tsPlugin()],
   },
   {
     input,
     output: { file: `${dir}/index.d.ts`, format: 'esm' },
+    external: ['react'],
     plugins: [dts()],
   },
 ]);

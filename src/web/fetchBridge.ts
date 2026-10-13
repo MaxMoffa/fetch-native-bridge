@@ -1,198 +1,186 @@
 import { generateUUID } from '../shared/uuid';
 import {
-  type FetchBridgeOptions,
+  PROTOCOL_VERSION,
+  type FetchCancelMessage,
   type FetchRequestMessage,
   type FetchResponseMessage,
-  type FormDataEntry,
   isFetchResponseMessage,
+  parseMessage,
 } from '../shared/protocol';
-import { uint8ArrayToBase64, base64ToUint8Array } from '../shared/base64';
+import {
+  FetchBridgeBlockedError,
+  FetchBridgeNetworkError,
+  FetchBridgeTimeoutError,
+  createAbortError,
+} from '../shared/errors';
 import { isReactNativeWebView } from './detect';
 import { PendingRequestMap } from './pending';
+import { prepareRequest, serializeBody } from './request';
+import { buildResponse } from './response';
 
 const DEFAULT_TIMEOUT = 30_000;
+
+export interface FetchBridgeOptions extends RequestInit {
+  /**
+   * Request timeout in ms, enforced on both sides of the bridge. `0` disables it.
+   * @default 30000
+   */
+  timeout?: number;
+}
 
 const _pending = new PendingRequestMap();
 let _listenerInstalled = false;
 
-function _makeAbortError(): Error {
-  try {
-    return new DOMException('The operation was aborted.', 'AbortError');
-  } catch {
-    const err = new Error('The operation was aborted.');
-    (err as any).name = 'AbortError';
-    return err;
-  }
+function _post(message: FetchRequestMessage | FetchCancelMessage): void {
+  (window as any).ReactNativeWebView?.postMessage(JSON.stringify(message));
 }
 
-function _onNativeMessage(event: MessageEvent): void {
-  if (typeof event.data !== 'string') return;
-  let data: unknown;
-  try {
-    data = JSON.parse(event.data);
-  } catch {
-    return;
-  }
-  if (!isFetchResponseMessage(data)) return;
-  if (data.error !== undefined) {
-    _pending.reject(data.id, new Error(data.error));
-  } else {
-    _pending.resolve(data.id, data);
-  }
+function _cancel(id: string): void {
+  _post({ type: 'FETCH_CANCEL', v: PROTOCOL_VERSION, id });
+}
+
+function _onNativeMessage(event: Event): void {
+  const data = parseMessage((event as MessageEvent).data);
+  if (isFetchResponseMessage(data)) _pending.resolve(data.id, data);
 }
 
 function _ensureListener(): void {
   if (_listenerInstalled) return;
   _listenerInstalled = true;
   window.addEventListener('message', _onNativeMessage);
-  // Android React Native WebView dispatches on document
-  document.addEventListener('message', _onNativeMessage as EventListener);
+  // Older Android react-native-webview versions dispatch on `document`.
+  document.addEventListener('message', _onNativeMessage);
 }
 
-function _buildResponse(msg: FetchResponseMessage): Response {
-  let bodyInit: BodyInit | null = null;
-  if (msg.bodyEncoding === 'base64' && msg.body) {
-    bodyInit = base64ToUint8Array(msg.body).buffer as ArrayBuffer;
-  } else {
-    bodyInit = msg.body || null;
+function _abortReason(signal: AbortSignal): unknown {
+  return signal.reason !== undefined ? signal.reason : createAbortError();
+}
+
+function _toError(msg: FetchResponseMessage, timeoutMs: number): Error {
+  const message = msg.error || 'Network request failed';
+  switch (msg.errorName) {
+    case 'TimeoutError':
+      return new FetchBridgeTimeoutError(msg.id, timeoutMs);
+    case 'AbortError':
+      return createAbortError(message);
+    case 'BlockedError':
+      return new FetchBridgeBlockedError(message);
+    default:
+      return new FetchBridgeNetworkError(message);
   }
-  return new Response(bodyInit, {
-    status: msg.status,
-    statusText: msg.statusText,
-    headers: msg.headers,
-  });
 }
 
-function buildHeaders(init?: RequestInit): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (!init?.headers) return result;
-  if (init.headers instanceof Headers) {
-    init.headers.forEach((value, key) => { result[key] = value; });
-  } else if (Array.isArray(init.headers)) {
-    for (const [key, value] of init.headers) result[key] = value;
-  } else {
-    Object.assign(result, init.headers);
+/** Browser fallback: applies an explicit `timeout` so the option behaves the same everywhere. */
+async function _fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const outer = init.signal ?? (typeof Request !== 'undefined' && input instanceof Request ? input.signal : null);
+  if (outer?.aborted) throw _abortReason(outer);
+
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const forward = () => controller.abort(outer!.reason);
+  outer?.addEventListener('abort', forward, { once: true });
+
+  try {
+    return await globalThis.fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (timedOut) throw new FetchBridgeTimeoutError('browser', timeoutMs);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    outer?.removeEventListener('abort', forward);
   }
-  return result;
 }
 
-function readBlobAsBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.slice(result.indexOf(',') + 1));
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
-}
+/**
+ * Drop-in replacement for `fetch`. Inside a React Native WebView the request is executed by
+ * the native app; everywhere else it delegates to `globalThis.fetch`.
+ */
+export async function fetchBridge(input: RequestInfo | URL, init?: FetchBridgeOptions): Promise<Response> {
+  const { timeout, ...requestInit } = init ?? {};
 
-export async function fetchBridge(
-  input: RequestInfo | URL,
-  init?: FetchBridgeOptions
-): Promise<Response> {
   if (!isReactNativeWebView()) {
-    const { timeout: _t, ...fetchInit } = init ?? {};
-    return globalThis.fetch(input, fetchInit);
+    return timeout !== undefined && timeout > 0
+      ? _fetchWithTimeout(input, requestInit, timeout)
+      : globalThis.fetch(input, requestInit);
   }
 
-  if (init?.signal?.aborted) {
-    return Promise.reject(_makeAbortError());
-  }
+  const prepared = await prepareRequest(input, requestInit);
+  const { signal } = prepared;
+  if (signal?.aborted) throw _abortReason(signal);
 
-  const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
+  const serialized = await serializeBody(prepared.rawBody, prepared.headers);
+  // Serializing a large body is async: honour an abort that happened meanwhile.
+  if (signal?.aborted) throw _abortReason(signal);
+
+  const timeoutMs = timeout ?? DEFAULT_TIMEOUT;
   const id = generateUUID();
-  const headers = buildHeaders(init);
-
-  let body: string | null = null;
-  let bodyType: FetchRequestMessage['bodyType'];
-  let formDataEntries: FormDataEntry[] | undefined;
-
-  const rawBody = init?.body ?? null;
-
-  if (!rawBody) {
-    // body stays null
-  } else if (typeof rawBody === 'string') {
-    body = rawBody;
-    bodyType = 'text';
-  } else if (rawBody instanceof URLSearchParams) {
-    body = rawBody.toString();
-    bodyType = 'text';
-  } else if (rawBody instanceof ArrayBuffer) {
-    body = uint8ArrayToBase64(new Uint8Array(rawBody));
-    bodyType = 'base64';
-  } else if (ArrayBuffer.isView(rawBody)) {
-    body = uint8ArrayToBase64(new Uint8Array(rawBody.buffer as ArrayBuffer, rawBody.byteOffset, rawBody.byteLength));
-    bodyType = 'base64';
-  } else if (rawBody instanceof FormData) {
-    const rawEntries: [string, FormDataEntryValue][] = [];
-    rawBody.forEach((value, name) => rawEntries.push([name, value]));
-    const entries: FormDataEntry[] = [];
-    for (const [name, value] of rawEntries) {
-      if (typeof value === 'string') {
-        entries.push({ name, value });
-      } else {
-        const data = await readBlobAsBase64(value);
-        entries.push({
-          name,
-          filename: value instanceof File ? value.name : 'blob',
-          data,
-          contentType: value.type || 'application/octet-stream',
-        });
-      }
-    }
-    formDataEntries = entries;
-    bodyType = 'formdata';
-    delete headers['content-type'];
-    delete headers['Content-Type'];
-  } else if (rawBody instanceof Blob) {
-    body = await readBlobAsBase64(rawBody);
-    bodyType = 'base64';
-  }
-
-  const msg: FetchRequestMessage = {
+  const message: FetchRequestMessage = {
     type: 'FETCH_REQUEST',
+    v: PROTOCOL_VERSION,
     id,
-    url,
-    method: init?.method ?? 'GET',
-    headers,
-    body,
-    bodyType,
-    formDataEntries,
+    url: prepared.url,
+    method: prepared.method,
+    headers: prepared.headers,
+    ...serialized,
+    timeout: timeoutMs,
   };
 
   _ensureListener();
-  ;(window as any).ReactNativeWebView.postMessage(JSON.stringify(msg));
 
-  const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT;
-  const signal = init?.signal;
   return new Promise<Response>((resolve, reject) => {
+    const onAbort = () => {
+      if (!_pending.has(id)) return;
+      _pending.reject(id, _abortReason(signal!) as Error);
+      _cancel(id);
+    };
+    const cleanup = () => signal?.removeEventListener('abort', onAbort);
+
     _pending.add(
       id,
-      (responseMsg) => {
+      (msg) => {
+        cleanup();
+        if (msg.error !== undefined || msg.errorName !== undefined) {
+          reject(_toError(msg, timeoutMs));
+          return;
+        }
         try {
-          resolve(_buildResponse(responseMsg));
+          resolve(buildResponse(msg));
         } catch (e) {
-          reject(e instanceof Error ? e : new Error(String(e)));
+          reject(e instanceof Error ? e : new FetchBridgeNetworkError(String(e)));
         }
       },
-      reject,
+      (err) => {
+        cleanup();
+        reject(err);
+      },
       timeoutMs,
+      () => _cancel(id)
     );
 
-    if (signal) {
-      const onAbort = () => {
-        _pending.reject(id, _makeAbortError());
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      _post(message);
+    } catch (e) {
+      // postMessage throws for payloads the bridge cannot carry (e.g. out of memory).
+      _pending.reject(id, new FetchBridgeNetworkError(`fetchBridge: postMessage failed: ${String(e)}`));
     }
   });
 }
 
+/**
+ * Rejects every pending request, asks native to cancel them and removes the message listener.
+ * Call it on logout or when the web app is torn down. `fetchBridge` keeps working afterwards.
+ */
 export function teardownFetchBridge(): void {
-  _pending.clear();
+  const ids = _pending.clear();
+  if (typeof window === 'undefined') return;
+  for (const id of ids) _cancel(id);
   window.removeEventListener('message', _onNativeMessage);
-  document.removeEventListener('message', _onNativeMessage as EventListener);
+  document.removeEventListener('message', _onNativeMessage);
   _listenerInstalled = false;
 }

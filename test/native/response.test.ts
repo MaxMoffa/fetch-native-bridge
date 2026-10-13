@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
-import { serializeResponse } from '../../src/native/response';
+import { describe, it, expect, vi } from 'vitest';
+import { serializeResponse, isBinaryContentType } from '../../src/native/response';
 
 function makeResponse(body: string | Uint8Array, contentType: string): Response {
   return new Response(body as BodyInit, {
@@ -75,5 +75,65 @@ describe('serializeResponse', () => {
     const response = makeResponse('data', 'text/plain; charset=utf-8');
     const msg = await serializeResponse('hdr-id', response);
     expect(msg.headers['content-type']).toContain('text/plain');
+  });
+});
+
+describe('serializeResponse — content classification', () => {
+  it.each([
+    ['application/problem+json', false],
+    ['application/vnd.api+json; charset=utf-8', false],
+    ['image/svg+xml', false],
+    ['text/csv', false],
+    ['', false],
+    ['application/x-protobuf', true],
+    ['application/zip', true],
+    ['font/woff2', true],
+    ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', true],
+  ])('%s → binary: %s', (contentType, binary) => {
+    expect(isBinaryContentType(contentType)).toBe(binary);
+  });
+
+  it('additionalBinaryTypes forces binary handling', () => {
+    expect(isBinaryContentType('text/csv; charset=utf-8', ['Text/CSV'])).toBe(true);
+  });
+
+  it('marks stripped binary bodies as omitted', async () => {
+    const msg = await serializeResponse('id', makeResponse(new Uint8Array([1]), 'application/zip'));
+    expect(msg.bodyOmitted).toBe(true);
+    expect(msg.body).toBe('');
+  });
+
+  it('omitBody skips text bodies too', async () => {
+    const msg = await serializeResponse('id', makeResponse('{"a":1}', 'application/json'), { omitBody: true });
+    expect(msg).toMatchObject({ body: '', bodyOmitted: true, status: 200 });
+  });
+
+  it('does not set bodyOmitted for forwarded bodies', async () => {
+    const msg = await serializeResponse('id', makeResponse('{"a":1}', 'application/json'));
+    expect(msg.bodyOmitted).toBeUndefined();
+    expect(msg.v).toBe('2');
+  });
+
+  it('reads binary bodies through FileReader in React Native', async () => {
+    vi.stubGlobal('navigator', { product: 'ReactNative' });
+    class FakeFileReader {
+      result: string | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      async readAsDataURL(blob: Blob) {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        this.result = `data:application/octet-stream;base64,${btoa(String.fromCharCode(...bytes))}`;
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal('FileReader', FakeFileReader);
+    try {
+      const msg = await serializeResponse('id', makeResponse(new Uint8Array([1, 2, 3]), 'application/zip'), {
+        sendBinaryBody: true,
+      });
+      expect(msg).toMatchObject({ bodyEncoding: 'base64', body: btoa('\x01\x02\x03') });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
